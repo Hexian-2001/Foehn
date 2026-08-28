@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inference"
+version = "0.1.0"
+description = "Model-agnostic forecast inference orchestration (stage 3)."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "xarray",
+    "pandas",
+    # The graphcast runner additionally needs, in the runtime env:
+    #   jax, haiku, scipy, and the upstream `weathernext` fork on sys.path.
+    # These are deliberately NOT listed here so this package itself stays
+    # importable in the lightweight stage-1/2 environment.
+]
+
+[project.scripts]
+run-inference = "inference.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

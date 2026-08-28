@@ -1,0 +1,17 @@
+# Upstream fork — a separate git repository with its own .git and history.
+# Never commit it into this repo; it is managed independently.
+upstream/
+
+# Large / regenerable binary artifacts.
+data/
+models/
+predictions/
+logs/
+
+# Python.
+__pycache__/
+*.pyc
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/

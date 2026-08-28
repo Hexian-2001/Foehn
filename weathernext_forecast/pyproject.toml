@@ -1,0 +1,21 @@
+# Editable-install metadata for THIS project (src/weathernext_forecast).
+#
+# Lets `pip install -e .` register the package so `import weathernext_forecast`
+# resolves from anywhere — including your editor's language server (Pylance),
+# which is what makes Ctrl+click "go to definition" work. The upstream fork has
+# its own setup.py and is installed separately (see requirements.txt).
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weathernext-forecast"
+version = "0.1.0"
+description = "GraphCast (WeatherNext 1 Graph) inference workspace"
+
+[project.scripts]
+run-inference = "weathernext_forecast.inference:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

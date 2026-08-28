@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-processing"
+version = "0.1.0"
+description = "Convert ECMWF open-data GRIB into GraphCast input netCDF (stage 2)."
+requires-python = ">=3.10"
+dependencies = [
+    "cfgrib>=0.9",
+    "eccodes",
+    "xarray",
+    "numpy",
+    "pandas",
+]
+
+[project.scripts]
+prepare-fc0 = "data_processing.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

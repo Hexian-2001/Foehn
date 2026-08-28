@@ -1,0 +1,13 @@
+# Editable-install BOTH packages so `import weathernext` AND
+# `import weathernext_forecast` work everywhere — the script, the REPL, and
+# (crucially) your editor's language server for Ctrl+click "go to definition".
+#
+#     pip install -r requirements.txt
+#
+#   -e .                    -> THIS project (src/weathernext_forecast), pyproject.toml
+#   -e upstream/weathernext -> the fork, and its deps (jax, dm-haiku, xarray, ...)
+-e .
+-e upstream/weathernext
+
+# netCDF backend for xarray (needed to read/write .nc files).
+netCDF4

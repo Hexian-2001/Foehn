@@ -1,0 +1,39 @@
+# =============================================================================
+# forecast_models — monorepo ignore rules.
+# =============================================================================
+# The pipeline is 3 stages (opendata_download -> data_processing -> inference).
+# Only SOURCE CODE belongs in git. Everything else is either an independent
+# repo, a large binary, or a regenerable artifact:
+
+# --- Independent git repository: the user's fork of google-deepmind/weathernext.
+# It has its own .git + remote (origin=Hexian-2001/weathernext) and is cloned
+# separately on the server. Never commit it here.
+weathernext_forecast/upstream/
+
+# --- Model weights — large binaries (~140 MB each), uploaded via scp, not git.
+weathernext_forecast/models/weights/
+weathernext_forecast/models/*.npz
+
+# --- Raw + processed weather data — regenerable (stage 1/2 reproduce it).
+weathernext_forecast/data/
+weathernext_forecast/predictions/
+data/
+predictions/
+
+# --- Debug / throwaway notebooks (heavy embedded image output).
+weathernext_forecast/src/weathernext_forecast/test.ipynb
+
+# --- Python / editors.
+__pycache__/
+*.pyc
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+.vscode/
+.idea/
+
+# --- Misc large/regenerable artifacts.
+*.grib2
+*.gstmp
+*.log
