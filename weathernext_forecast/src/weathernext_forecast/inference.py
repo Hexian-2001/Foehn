@@ -280,6 +280,7 @@ def main():
     out_name = (f"predictions_{ref_time}_"
                 f"{config.MODEL_FILENAME.removesuffix('.npz')}.nc")
     out_path = config.PREDICTIONS_DIR / out_name
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     predictions.to_netcdf(out_path)
     print(f"[6/6] Saved predictions to: {out_path}", flush=True)
     print(f"      {dict(predictions.sizes)}", flush=True)
