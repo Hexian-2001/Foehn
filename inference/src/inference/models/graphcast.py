@@ -55,7 +55,7 @@ def _validate_input_matches_model(model_config, task_config, inputs):
 
 class GraphCastRunner(ModelRunner):
     """Run a pretrained GraphCast checkpoint on a local .nc input file."""
-
+        
     def run(
         self,
         spec: ModelSpec,
@@ -100,11 +100,18 @@ class GraphCastRunner(ModelRunner):
         print(f"[3/5] Loaded input data: {input_path.name}")
 
         # ---- 4. Extract inputs / targets / forcings. ----
-        inputs, targets, forcings = data_utils.extract_inputs_targets_forcings(
-            example_batch,
-            target_lead_times=target_lead_times,
-            **dataclasses.asdict(task_config),
-        )
+        # The solar/time forcings are computed with jax.jit and would normally
+        # target the GPU. On a shared Setonix node the GPU can be saturated by
+        # other users' jobs, which stalls this step in an idle GPU wait (the
+        # integration over ~361 bins makes it ~157e6-element op per timestep).
+        # Forcings are a one-time CPU-bound computation, so pin them to the CPU
+        # device; the heavy model rollout (step 5) still runs on the GPU.
+        with jax.default_device(jax.devices("cpu")[0]):
+            inputs, targets, forcings = data_utils.extract_inputs_targets_forcings(
+                example_batch,
+                target_lead_times=target_lead_times,
+                **dataclasses.asdict(task_config),
+            )
         _validate_input_matches_model(model_config, task_config, inputs)
 
         # Fail fast with a *clear* message if the requested lead times ran past

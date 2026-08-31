@@ -1,0 +1,9 @@
+# Force LF line endings for scripts that must run on Linux (Pawsey Setonix).
+# A Windows CRLF ending in a `#!/bin/bash` shebang (or any shell/slurm line)
+# breaks with "bad interpreter" / slurm parse errors. This rule makes the
+# committed blob always LF regardless of each machine's `core.autocrlf`.
+*.sbatch  text eol=lf
+*.sh      text eol=lf
+
+# Python is tolerant of either, but LF keeps diffs clean across Win/Linux.
+*.py      text eol=lf

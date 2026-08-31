@@ -11,3 +11,6 @@
 
 # netCDF backend for xarray (needed to read/write .nc files).
 netCDF4
+
+# progress bar for the autoregressive rollout (optional; see inference.py).
+tqdm
