@@ -14,15 +14,15 @@
 # portable.
 # =============================================================================
 #SBATCH --job-name=graphcast_oper
-#SBATCH --account=__YOUR_PROJECT__          # <-- set this
+#SBATCH --account=pawsey0115-gpu
 #SBATCH --partition=gpu                      # <-- set this (Setonix: `gpu` / `gpu-high-mem`)
 #SBATCH --nodes=1
 #SBATCH --exclusive                          # whole node (8x MI250X): reliable 24/7 runs, no
 #                                            # GPU contention that can stall the run. This single
 #                                            # forecast still uses ONE GCD. Cheaper alternative:
 #                                            #   drop --exclusive, use --gpus-per-node=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+# NOTE: Setonix GPU allocations REJECT `--cpus-per-task`/`--mem` (each GCD
+# auto-allocates 8 cores; `--exclusive` gives the whole node anyway).
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/graphcast_%j.out
 #SBATCH --error=logs/graphcast_%j.err
@@ -31,7 +31,10 @@ set -euo pipefail
 
 # ---- SETONIX: environment ------------------------------------------------
 module load rocm/6.4.1                       # per the infer-gpu env that was tested
-source activate infer-gpu 2>/dev/null || conda activate infer-gpu
+# conda's base env on Setonix is broken (frozendict ImportError), so
+# `conda activate` fails. Point PATH at the env directly instead — this is the
+# verified-working activation for infer-gpu.
+export PATH=/scratch/pawsey0115/hwang4/miniconda3/envs/infer-gpu/bin:$PATH
 # --------------------------------------------------------------------------
 
 # ---- 1. Warm the ROCm/HSA stack BEFORE anything imports jax --------------
