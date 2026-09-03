@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # Project root. This file lives at:
@@ -34,6 +35,12 @@ DATA_DIR = PROJECT_ROOT / "data" / "processed"        # standard-format .nc inpu
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"          # files exactly as downloaded
 PREDICTIONS_DIR = PROJECT_ROOT / "predictions"        # model output (.nc)
 
+# External results tree — DECOUPLED from the package, one level above the project.
+# Predictions + visualizations for every model land here, organized by model:
+#   <results>/<model>/<variant>/<init>Z/{predictions,visualizations}/
+# Overridable via $RESULTS_ROOT (the realtime pipeline sets it explicitly).
+RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", str(PROJECT_ROOT.parent / "results")))
+
 
 # -----------------------------------------------------------------------------
 # Model & data selection — edit this block, nothing else.
@@ -46,6 +53,16 @@ PREDICTIONS_DIR = PROJECT_ROOT / "predictions"        # model output (.nc)
 #   GraphCast_operational.npz  -> 0.25 deg, 13 levels, HRES-fc0 (no precip input)
 MODEL_FILENAME = "GraphCast_operational.npz"
 
+# Results-tree identity for the saved predictions (see prediction_store).
+# Kept explicit rather than parsed from MODEL_FILENAME so the tree stays stable
+# as checkpoints change.
+MODEL_FAMILY = "graphcast"
+MODEL_VARIANT = "operational"
+
+# Crop region for the saved prediction. "china" writes only the China box
+# (~0.4 GB) instead of the full-global ~13 GB. Set "global" to keep everything.
+PREDICT_REGION = os.environ.get("WEATHERNEXT_PREDICT_REGION", "china")
+
 # The input weather file in DATA_DIR, already in standard format:
 #   dims   : (batch, time, lat, lon)            surface / static variables
 #            (batch, time, lat, lon, level)     pressure-level variables
@@ -53,7 +70,12 @@ MODEL_FILENAME = "GraphCast_operational.npz"
 #            lat, lon, level (hPa)
 # Its resolution and level count MUST match the chosen model.
 # (Produced by the stage-2 `data_processing` package from open-data IFS fc0.)
-INPUT_FILENAME = "source-ifs_date-2026-08-27_res-0.25_levels-13_steps-40.nc"
+# Overridable via WEATHERNEXT_INPUT_FILENAME so the realtime pipeline can point
+# at whatever date it just downloaded/processed without editing this file.
+INPUT_FILENAME = os.environ.get(
+    "WEATHERNEXT_INPUT_FILENAME",
+    "source-ifs_date-2026-08-27_res-0.25_levels-13_steps-40.nc",
+)
 
 # Forecast lead times to predict, as an xarray label slice in 6-hour steps.
 # The steps-40 input file has 42 timesteps = 2 for input + 40 for target, so

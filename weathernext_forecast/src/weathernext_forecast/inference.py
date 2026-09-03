@@ -44,6 +44,7 @@ except ImportError:  # pragma: no cover - depends on the env, not the code
     tqdm = None
 
 from weathernext_forecast import config
+from weathernext_forecast import prediction_store
 
 # Make the upstream `weathernext` package importable. The fork lives outside the
 # installed packages at config.UPSTREAM_DIR; adding it to sys.path lets us
@@ -274,14 +275,23 @@ def main():
         del chunk
     predictions = xarray.concat(chunks, dim="time")
 
-    # ---- 7. Save the result. ----
+    # ---- 7. Save the result (unified + cropped, into the external results tree). ----
     # `predictions` has the same shape as `targets` and contains the target
     # variables already un-normalized into real physical units (float32).
-    out_name = (f"predictions_{ref_time}_"
-                f"{config.MODEL_FILENAME.removesuffix('.npz')}.nc")
-    out_path = config.PREDICTIONS_DIR / out_name
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    predictions.to_netcdf(out_path)
+    # Instead of writing the full-global ~13 GB file and cropping it later, we
+    # unify + crop in-memory and write only the region of interest straight into
+    # the model-organized results tree:
+    #   <results>/<model>/<variant>/<init>Z/predictions/
+    #       <model>_<variant>_IC<init>_STEPS<40>_<240>h_<res>deg_<region>.nc
+    out_path = prediction_store.save_unified(
+        predictions,
+        model=config.MODEL_FAMILY,
+        variant=config.MODEL_VARIANT,
+        init=np.datetime64(ref_time),
+        region=config.PREDICT_REGION,
+        out_root=config.RESULTS_ROOT,
+        source=config.MODEL_FILENAME,
+    )
     print(f"[6/6] Saved predictions to: {out_path}", flush=True)
     print(f"      {dict(predictions.sizes)}", flush=True)
     print("\nPrediction variables:", list(predictions.data_vars), flush=True)

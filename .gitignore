@@ -10,9 +10,15 @@
 # separately on the server. Never commit it here.
 weathernext_forecast/upstream/
 
-# --- Model weights — large binaries (~140 MB each), uploaded via scp, not git.
+# --- Independent git repository: the user's fork of microsoft/aurora
+# (origin=Hexian-2001/aurora). Same rule — never commit it here.
+aurora_forecast/upstream/
+
+# --- Model weights — large binaries (GraphCast ~140 MB, Aurora 4-5 GB each),
+# uploaded via scp / fetched on Pawsey, NOT via git.
 weathernext_forecast/models/weights/
 weathernext_forecast/models/*.npz
+aurora_forecast/model_weights/
 
 # --- Raw + processed weather data — regenerable (stage 1/2 reproduce it).
 weathernext_forecast/data/
@@ -37,3 +43,8 @@ venv/
 *.grib2
 *.gstmp
 *.log
+*.tar
+*.b64
+
+# --- Local sync scratch dir (rsync/scp pull staging).
+_syn_pred/

@@ -20,7 +20,7 @@ import numpy as np
 import xarray as xr
 
 from inference.models.base import ModelRunner, ModelSpec
-
+    
 
 def _build_wrapped_predictor(model_config, task_config, stats):
     """Assemble the GraphCast predictor (GraphCast -> bfloat16 -> normalize
@@ -55,7 +55,7 @@ def _validate_input_matches_model(model_config, task_config, inputs):
 
 class GraphCastRunner(ModelRunner):
     """Run a pretrained GraphCast checkpoint on a local .nc input file."""
-        
+
     def run(
         self,
         spec: ModelSpec,

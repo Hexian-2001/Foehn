@@ -1,27 +1,34 @@
 #!/usr/bin/env python3
 # =============================================================================
-# Prediction visualizer for the WeatherNext 1 Graph / GraphCast operational run.
+# Forecast visualizer — publication-grade (top-journal) figure set.
 # =============================================================================
-# Reads a predictions .nc (produced by `scripts/run_inference.py`) and renders
-# an industrial-grade figure set:
+# Reads a GraphCast/WeatherNext predictions .nc and renders a compact, decoupled
+# figure set into an EXTERNAL results tree (not inside the model project):
 #
-#   1. Animated GIFs        — 2-m temperature, and MSLP + 10-m wind, over the
-#                             full 10-day (40 x 6 h) forecast horizon.
-#   2. Static 2-D maps      — a curated set of lead times for each variable
-#                             (2-m temp, 10-m wind, ~100-m/1000 hPa wind, MSLP,
-#                             6-h precip, 500 hPa geopotential).
-#   3. Overview grid        — one figure of 2-m temperature at many lead times.
-#   4. 1-D time series      — at a chosen lat/lon: 2-m temp, 10-m wind, MSLP,
-#                             precip over the horizon.
+#     <results>/<model>/<variant>/<init>Z/visualizations/
+#         series/   timeseries_<city>_<lat>N_<lon>E.png   (one 2x2 figure per city)
+#         gif/      anim_2m_temperature.gif | anim_wind_10m.gif
+#                   anim_wind_100m.gif | anim_mslp_wind10m.gif
+#         overview/ 2m_temperature_40steps.png | wind_10m_40steps.png
+#                   wind_100m_40steps.png   (small-multiples, all 40 lead times)
 #
-# Coastlines come from Cartopy when available and fall back to a plain
-# plate-carree grid otherwise. Output goes to <project>/visualizations/<stem>/.
+# Conventions (meteorological, colorblind-safe, non-rainbow):
+#   * 2-m temperature  K  -> degC          (RdBu_r, diverging)
+#   * wind speed       m/s                 (viridis, sequential, floor at 0)
+#   * MSLP             Pa  -> hPa          (RdBu_r)
+#   * 6-h precip       m   -> mm           (YlGnBu, sequential, floor at 0)
+#   * three cities use Okabe-Ito hues (CVD-safe): Beijing/SH/GZ = orange/blue/green
+#   * time axes show ACTUAL timestamps (init + lead), never bare lead-hours
+#
+# Accepts BOTH the legacy GraphCast file (batch dim + timedelta `time`) and the
+# unified results file (no batch, absolute `time` + `init_time`/`lead_time`
+# coords). Actual valid times are reconstructed from init + lead when the file
+# carries only a timedelta coordinate.
 #
 # Usage:
 #   python scripts/visualize.py --predictions predictions/predictions_....nc
-#   python scripts/visualize.py --predictions ...nc --lat 31.2 --lon 121.5
-#   python scripts/visualize.py --predictions ...nc --lead-hours 0 72 240
-#   python scripts/visualize.py --predictions ...nc --no-gif --no-maps --series
+#   python scripts/visualize.py --predictions ... --model graphcast --variant operational
+#   python scripts/visualize.py --predictions ... --no-gif --no-overview
 # =============================================================================
 
 from __future__ import annotations
@@ -37,6 +44,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # headless — no $DISPLAY on Setonix
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import numpy as np
 
 try:
@@ -54,10 +62,22 @@ try:
 except ImportError:  # pragma: no cover
     Image = None
 
-# Project root (this file lives at <root>/scripts/visualize.py).
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# -----------------------------------------------------------------------------
+# Paths & run identity
+# -----------------------------------------------------------------------------
+# script lives at <repo>/weathernext_forecast/scripts/visualize.py
+REPO_ROOT = Path(__file__).resolve().parents[2]  # shared repo root (Foehn/ etc.)
 
 INIT_RE = re.compile(r"predictions_(\d{4}-\d{2}-\d{2}T\d{2})_")
+UNIFIED_RE = re.compile(r"_IC(\d{4}-\d{2}-\d{2}T\d{2})_")
+
+# Okabe-Ito categorical hues (colorblind-safe), one per city.
+CITIES = [
+    ("Beijing", 39.90, 116.40, "#D55E00", "o"),
+    ("Shanghai", 31.23, 121.47, "#0072B2", "s"),
+    ("Guangzhou", 23.13, 113.26, "#009E73", "^"),
+]
 
 
 # -----------------------------------------------------------------------------
@@ -65,368 +85,413 @@ INIT_RE = re.compile(r"predictions_(\d{4}-\d{2}-\d{2}T\d{2})_")
 # -----------------------------------------------------------------------------
 @dataclasses.dataclass
 class Field:
-    """How to load and render one 2-D scalar field from the predictions .nc."""
-
-    name: str                     # output basename
-    label: str                    # plot title
-    unit: str                     # colorbar label
-    cmap: str                     # matplotlib colormap
-    vmin: float | None            # fixed color floor (None -> percentile)
-    vmax: float | None            # fixed color ceiling (None -> percentile)
-    src: str | None = None        # source variable (defaults to name)
-    level: float | None = None    # select this pressure level for 3-D vars
-    u: str | None = None          # if set, field is wind speed sqrt(u^2+v^2)
+    name: str            # output basename
+    label: str           # plot title / legend label
+    unit: str            # colorbar / axis label
+    cmap: str            # matplotlib colormap
+    src: str | None = None      # source variable (defaults to name)
+    level: int | None = None    # select this pressure level for 3-D vars
+    u: str | None = None        # if set, field = sqrt(u^2 + v^2) at level
     v: str | None = None
+    scale: float = 1.0          # multiplicative unit conversion
+    offset: float = 0.0         # additive unit conversion (K -> degC)
+    vmin_zero: bool = False     # clamp color floor at 0 (wind, precip)
 
 
-# The canonical set of maps. 10m wind uses the surface u/v; "~100 m wind" is
-# approximated by the 1000 hPa pressure level (geopotential height ~100 m).
 FIELDS = [
-    Field("2m_temperature", "2-m temperature", "K", "RdBu_r", 215.0, 315.0),
-    Field("mean_sea_level_pressure", "Mean sea-level pressure", "hPa", "RdBu_r", 970.0, 1040.0),
-    Field("total_precipitation_6hr", "6-h total precipitation", "mm", "YlGnBu", 0.0, 50.0),
-    Field("wind_speed_10m", "10-m wind speed", "m/s", "turbo", 0.0, 30.0,
-          u="10m_u_component_of_wind", v="10m_v_component_of_wind"),
-    Field("wind_speed_1000hPa", "1000 hPa wind speed (≈100 m)", "m/s", "turbo", 0.0, 40.0,
-          u="u_component_of_wind", v="v_component_of_wind", level=1000.0),
-    Field("geopotential_500hPa", "500 hPa geopotential", "m$^2$/s$^2$", "viridis", None, None,
-          src="geopotential", level=500.0),
+    Field("2m_temperature", "2-m temperature", "°C", "RdBu_r",
+          offset=-273.15),
+    Field("wind_10m", "10-m wind speed", "m/s", "viridis",
+          u="10m_u_component_of_wind", v="10m_v_component_of_wind", vmin_zero=True),
+    Field("wind_100m", "100-m wind speed (1000 hPa)", "m/s", "viridis",
+          u="u_component_of_wind", v="v_component_of_wind", level=1000, vmin_zero=True),
+    Field("mean_sea_level_pressure", "Mean sea-level pressure", "hPa", "RdBu_r",
+          scale=0.01),
+    Field("total_precipitation_6hr", "6-h total precipitation", "mm", "YlGnBu",
+          scale=1000.0, vmin_zero=True),
 ]
 
-# Which fields get a GIF (pcolormesh-only). MSLP+wind is a special overlay GIF.
-GIF_FIELDS = ["2m_temperature", "wind_speed_10m"]
+BY_NAME = {f.name: f for f in FIELDS}
 
-# Static maps at these lead hours by default (every 24 h + the final step).
-DEFAULT_LEAD_HOURS = [0, 24, 48, 72, 96, 120, 144, 168, 192, 216, 240]
+
+def field_available(ds: xr.Dataset, f: Field) -> bool:
+    """Whether every source variable a field needs is present in `ds`.
+
+    Lets the visualizer run unchanged on models that predict a different variable
+    set (e.g. Aurora has no ``total_precipitation_6hr``): missing fields are
+    skipped with a note rather than raising.
+    """
+    if f.u is not None:
+        # Derived field (e.g. wind speed from u/v components): only the
+        # component variables are needed, not the field's output name.
+        needed = {f.u, f.v}
+    else:
+        needed = {f.src or f.name}
+    return needed <= set(ds.variables)
+
+# The condensed overview covers these three (the user's focus: wind + temperature).
+OVERVIEW_FIELDS = ["2m_temperature", "wind_10m", "wind_100m"]
+GIF_FIELDS = ["2m_temperature", "wind_10m", "wind_100m"]
 
 
 # -----------------------------------------------------------------------------
-# Helpers
+# Loading helpers
 # -----------------------------------------------------------------------------
 def parse_init_time(path: Path) -> np.datetime64:
-    m = INIT_RE.search(path.stem)
-    if not m:
-        # Fall back: assume the file is unnamed data and use a placeholder.
-        return np.datetime64("NaT")
-    return np.datetime64(m.group(1).replace("T", "T") + ":00")
+    for rx in (INIT_RE, UNIFIED_RE):
+        m = rx.search(path.stem)
+        if m:
+            return np.datetime64(m.group(1))  # "2026-08-27T00" -> datetime64
+    raise SystemExit(f"cannot parse init time from filename: {path.name}")
 
 
-def lead_hours(ds: xr.Dataset) -> np.ndarray:
-    return ds["time"].values.astype("timedelta64[h]").astype(int)
+def valid_times(ds: xr.Dataset, init: np.datetime64):
+    """Actual valid timestamps (init + lead) and lead hours.
+
+    Handles both schemas: the legacy GraphCast file carries a `time` (timedelta)
+    coord, while the unified results file carries an absolute `time` (datetime).
+    """
+    t = ds["time"]
+    init_s = init.astype("datetime64[s]")
+    if np.issubdtype(t.dtype, np.timedelta64):
+        lead = t.values.astype("timedelta64[h]").astype(int)
+        valid = (init_s + t.values).astype("datetime64[m]")
+        return valid, lead
+    # unified: `time` is already the absolute valid time
+    lead = (t.values.astype("datetime64[s]") - init_s).astype("timedelta64[h]").astype(int)
+    valid = t.values.astype("datetime64[m]")
+    return valid, lead
 
 
-def load_field(ds: xr.Dataset, f: Field) -> xr.DataArray:
-    """Return the field as a (time, lat, lon) DataArray (batch dropped)."""
+def _drop_batch(da):
+    """Remove the singleton batch dim/coord if present (legacy schema)."""
+    if "batch" in da.dims:
+        da = da.isel(batch=0)
+    if "batch" in da.coords:
+        da = da.drop_vars("batch")
+    return da
+
+
+def load_field(ds: xr.Dataset, f: Field) -> np.ndarray:
+    """Return the field as a (time, lat, lon) float32 array, batch dropped."""
     if f.u is not None:
-        u = ds[f.u].isel(batch=0)
-        v = ds[f.v].isel(batch=0)
+        u = _drop_batch(ds[f.u])
+        v = _drop_batch(ds[f.v])
         if f.level is not None:
             u = u.sel(level=f.level)
             v = v.sel(level=f.level)
-        data = np.sqrt(u**2 + v**2)
+        data = np.sqrt(u.values.astype(np.float32) ** 2 + v.values.astype(np.float32) ** 2)
     else:
         src = f.src or f.name
-        data = ds[src].isel(batch=0)
-        if "level" in data.dims:
-            if f.level is None:
-                raise ValueError(f"field {f.name} needs a level")
-            data = data.sel(level=f.level)
-    return data.rename(f.name)
+        da = _drop_batch(ds[src])
+        if f.level is not None:
+            da = da.sel(level=f.level)
+        data = da.values.astype(np.float32)
+    if f.scale != 1.0:
+        data = data * f.scale
+    if f.offset != 0.0:
+        data = data + f.offset
+    return data
 
 
 def color_limits(f: Field, data: np.ndarray) -> tuple[float, float]:
-    vmin = f.vmin if f.vmin is not None else float(np.nanpercentile(data, 2))
-    vmax = f.vmax if f.vmax is not None else float(np.nanpercentile(data, 98))
+    vmin = 0.0 if f.vmin_zero else float(np.nanpercentile(data, 2))
+    vmax = float(np.nanpercentile(data, 98))
     if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin >= vmax:
         vmin, vmax = 0.0, 1.0
     return vmin, vmax
 
 
-def new_map_ax():
-    """Build a global plate-carree axis, with coastlines if cartopy is present."""
+def coarsen(data: np.ndarray, lat, lon, factor: int = 2):
+    """Stride-down a (time, lat, lon) field for cheap small-multiples panels."""
+    return data[:, ::factor, ::factor], lat[::factor], lon[::factor]
+
+
+# -----------------------------------------------------------------------------
+# Map axes
+# -----------------------------------------------------------------------------
+def new_global_ax(figsize=(8.9, 5.0), gridlines=True, border=True):
     if HAS_CARTOPY:
         proj = ccrs.PlateCarree()
-        fig, ax = plt.subplots(figsize=(12, 6.2), subplot_kw={"projection": proj})
+        fig, ax = plt.subplots(figsize=figsize, subplot_kw={"projection": proj})
         ax.set_global()
-        ax.coastlines(resolution="110m", linewidth=0.6, color="0.25")
-        ax.add_feature(cfeature.BORDERS, linewidth=0.3, alpha=0.6, color="0.4")
-        gl = ax.gridlines(draw_labels=True, linewidth=0.3, alpha=0.4, color="0.7")
-        gl.top_labels = False
-        gl.right_labels = False
-        gl.xlabel_style = {"size": 7}
-        gl.ylabel_style = {"size": 7}
+        ax.coastlines(resolution="110m", linewidth=0.5, color="0.28")
+        if border:
+            ax.add_feature(cfeature.BORDERS, linewidth=0.3, alpha=0.5, color="0.45")
+        if gridlines:
+            ax.gridlines(draw_labels=False, linewidth=0.3, alpha=0.4, color="0.65")
+        # Tight frame: title strip above, colorbar strip below, map fills the rest
+        # (drop default subplot margins; no gridline labels in a moving animation).
+        fig.subplots_adjust(left=0.02, right=0.98, top=0.92, bottom=0.07)
         return fig, ax, proj
-    fig, ax = plt.subplots(figsize=(12, 6.2))
+    fig, ax = plt.subplots(figsize=figsize)
     ax.set_aspect("equal")
-    ax.set_xlabel("longitude")
-    ax.set_ylabel("latitude")
     return fig, ax, None
 
 
-def pcolormesh(ax, lon, lat, data, vmin, vmax, cmap, proj):
-    kw = dict(vmin=vmin, vmax=vmax, cmap=cmap, shading="nearest")
+def pcolormesh(ax, lon, lat, data, vmin, vmax, cmap, proj, shading="nearest"):
+    kw = dict(vmin=vmin, vmax=vmax, cmap=cmap, shading=shading)
     if HAS_CARTOPY:
         return ax.pcolormesh(lon, lat, data, transform=proj, **kw)
     return ax.pcolormesh(lon, lat, data, **kw)
 
 
-def lead_label(lead_h: int) -> str:
-    d, h = divmod(lead_h, 24)
-    if d and not h:
-        return f"T+{d}d"
-    if d:
-        return f"T+{d}d{h:02d}h"
-    return f"T+{h}h"
+def fmt_valid(dt64) -> str:
+    return np.datetime_as_string(dt64, unit="m").replace("T", " ") + "Z"
 
 
-def fig_to_pil(fig) -> "Image.Image":
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=90, facecolor="white")
-    buf.seek(0)
-    return Image.open(buf).copy()
+def fmt_init(init: np.datetime64) -> str:
+    return np.datetime_as_string(init, unit="m").replace("T", " ")
 
 
 # -----------------------------------------------------------------------------
-# 1. Animated GIFs
+# 1. Time series — one figure per city, actual timestamps on the x-axis
 # -----------------------------------------------------------------------------
-def animate_pcolormesh(ds: xr.Dataset, f: Field, out_gif: Path, init_label: str, fps: int):
-    lon = ds["lon"].values
-    lat = ds["lat"].values
-    data = load_field(ds, f).values
-    vmin, vmax = color_limits(f, data)
-    hours = lead_hours(ds)
-
-    frames = []
-    for i, lead in enumerate(hours):
-        fig, ax, proj = new_map_ax()
-        mesh = pcolormesh(ax, lon, lat, data[i], vmin, vmax, f.cmap, proj)
-        ax.set_title(f"{f.label}  [{f.unit}]   init {init_label}   {lead_label(lead)}",
-                     fontsize=12)
-        fig.colorbar(mesh, ax=ax, orientation="horizontal", fraction=0.045, pad=0.07,
-                     label=f.unit)
-        frames.append(fig_to_pil(fig))
-        plt.close(fig)
-
-    if Image is None:
-        # No Pillow: write frames as PNGs and bail on the GIF.
-        out_gif.with_suffix(".png")
-        raise SystemExit("Pillow not available; cannot build GIF")
-
-    out_gif.parent.mkdir(parents=True, exist_ok=True)
-    frames[0].save(out_gif, save_all=True, append_images=frames[1:],
-                   duration=max(40, int(1000 / fps)), loop=0, optimize=False)
-    print(f"  gif: {out_gif}  ({len(frames)} frames, {fps} fps)", flush=True)
+def fmt_latlon(lat: float, lon: float) -> str:
+    ns = "N" if lat >= 0 else "S"
+    ew = "E" if lon >= 0 else "W"
+    return f"{abs(lat):.2f}°{ns}, {abs(lon):.2f}°{ew}"
 
 
-def animate_mslp_wind(ds: xr.Dataset, out_gif: Path, init_label: str, fps: int):
-    """MSLP as filled field + contours, overlaid with 10-m wind speed."""
-    lon = ds["lon"].values
-    lat = ds["lat"].values
-    mslp = ds["mean_sea_level_pressure"].isel(batch=0).values  # hPa
-    wspd = np.sqrt(
-        ds["10m_u_component_of_wind"].isel(batch=0).values ** 2
-        + ds["10m_v_component_of_wind"].isel(batch=0).values ** 2
-    )
-    hours = lead_hours(ds)
-    vmin, vmax = 0.0, 30.0  # m/s
+def fmt_latlon_file(lat: float, lon: float) -> str:
+    ns = "N" if lat >= 0 else "S"
+    ew = "E" if lon >= 0 else "W"
+    return f"{abs(lat):.2f}{ns}_{abs(lon):.2f}{ew}"
 
-    frames = []
-    for i, lead in enumerate(hours):
-        fig, ax, proj = new_map_ax()
-        mesh = pcolormesh(ax, lon, lat, wspd[i], vmin, vmax, "turbo", proj)
-        # MSLP contours every 4 hPa on top.
-        levels = np.arange(950, 1051, 4.0)
-        if HAS_CARTOPY:
-            cs = ax.contour(lon, lat, mslp[i], levels=levels, colors="k",
-                            linewidths=0.6, transform=proj)
+
+def time_series_city(ds: xr.Dataset, init, valid, city, out_path: Path):
+    name, lat, lon, color, marker = city
+    fig, axes = plt.subplots(2, 2, figsize=(11.0, 6.6), sharex=True)
+
+    panels = [
+        ("2m_temperature", "2-m temperature [°C]", -273.15, 1.0, ("2m_temperature",)),
+        ("wind_10m", "10-m wind speed [m/s]", 0.0, 1.0,
+         ("10m_u_component_of_wind", "10m_v_component_of_wind")),
+        ("mean_sea_level_pressure", "MSLP [hPa]", 0.0, 0.01, ("mean_sea_level_pressure",)),
+        ("total_precipitation_6hr", "6-h precipitation [mm]", 0.0, 1000.0,
+         ("total_precipitation_6hr",)),
+    ]
+    # Drop panels whose source variables this model did not predict (e.g. Aurora
+    # has no precipitation); the empty subplot is hidden below.
+    panels = [p for p in panels if all(n in ds for n in p[4])]
+    x = mdates.date2num(valid.astype("datetime64[s]").astype(object).tolist())
+
+    p = _drop_batch(ds.sel(lat=lat, lon=lon, method="nearest"))
+    for ax, (key, ylabel, off, sc, _req) in zip(axes.flat, panels):
+        if key == "wind_10m":
+            y = np.sqrt(p["10m_u_component_of_wind"].values.astype(np.float32) ** 2
+                        + p["10m_v_component_of_wind"].values.astype(np.float32) ** 2)
         else:
-            cs = ax.contour(lon, lat, mslp[i], levels=levels, colors="k", linewidths=0.6)
-        ax.clabel(cs, fmt="%d", fontsize=5, inline=True, inline_spacing=2)
-        ax.set_title(f"MSLP (contours) + 10-m wind   init {init_label}   {lead_label(lead)}",
-                     fontsize=12)
-        fig.colorbar(mesh, ax=ax, orientation="horizontal", fraction=0.045, pad=0.07,
-                     label="10-m wind speed [m/s]")
-        frames.append(fig_to_pil(fig))
-        plt.close(fig)
+            y = p[key].values.astype(np.float32)
+        y = y * sc + off
+        ax.plot(x, y, marker=marker, ms=4, lw=1.8, color=color)
+        ax.set_ylabel(ylabel, fontsize=10)
+        ax.grid(True, alpha=0.3, linewidth=0.5)
+        ax.tick_params(labelsize=9)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+    for ax in axes.flat[len(panels):]:
+        ax.axis("off")
 
-    out_gif.parent.mkdir(parents=True, exist_ok=True)
-    frames[0].save(out_gif, save_all=True, append_images=frames[1:],
-                   duration=max(40, int(1000 / fps)), loop=0, optimize=False)
-    print(f"  gif: {out_gif}  ({len(frames)} frames, {fps} fps)", flush=True)
+    for ax in axes[-1, :]:
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
+        ax.set_xlabel("Valid time (UTC)", fontsize=10)
+        ax.tick_params(labelsize=9)
 
-
-# -----------------------------------------------------------------------------
-# 2. Static 2-D maps
-# -----------------------------------------------------------------------------
-def static_maps(ds: xr.Dataset, f: Field, out_dir: Path, lead_list, init_label: str):
-    lon = ds["lon"].values
-    lat = ds["lat"].values
-    data = load_field(ds, f).values
-    print(f"  [{f.name}] shape={data.shape} min={float(np.nanmin(data)):.4g} "
-          f"max={float(np.nanmax(data)):.4g} nan={int(np.isnan(data).sum())}/{data.size}",
-          flush=True)
-    vmin, vmax = color_limits(f, data)
-    hours = lead_hours(ds)
-
-    out_dir = out_dir / f.name
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for lead in lead_list:
-        idx = int(np.argmin(np.abs(hours - lead)))
-        if abs(hours[idx] - lead) > 6:
-            print(f"  skip {f.name} lead {lead}h (no matching step)", flush=True)
-            continue
-        fig, ax, proj = new_map_ax()
-        mesh = pcolormesh(ax, lon, lat, data[idx], vmin, vmax, f.cmap, proj)
-        ax.set_title(f"{f.label}  [{f.unit}]   init {init_label}   {lead_label(int(hours[idx]))}",
-                     fontsize=12)
-        fig.colorbar(mesh, ax=ax, orientation="horizontal", fraction=0.045, pad=0.07,
-                     label=f.unit)
-        fp = out_dir / f"{f.name}_T+{int(hours[idx]):03d}h.png"
-        fig.savefig(fp, dpi=100, facecolor="white")
-        plt.close(fig)
-    print(f"  maps: {out_dir}  ({len(lead_list)} lead times)", flush=True)
-
-
-def overview_grid(ds: xr.Dataset, out_path: Path, init_label: str):
-    """One figure: 2-m temperature at a grid of lead times."""
-    f = next(x for x in FIELDS if x.name == "2m_temperature")
-    lon = ds["lon"].values
-    lat = ds["lat"].values
-    data = load_field(ds, f).values
-    vmin, vmax = color_limits(f, data)
-    hours = lead_hours(ds)
-    leads = [0, 24, 48, 72, 96, 120, 144, 168, 192, 216, 240]
-    leads = [l for l in leads if l <= int(hours[-1])]
-
-    ncols = 4
-    nrows = int(np.ceil(len(leads) / ncols))
-    proj = ccrs.PlateCarree() if HAS_CARTOPY else None
-    fig = plt.figure(figsize=(ncols * 4.2, nrows * 2.4))
-    for k, lead in enumerate(leads):
-        idx = int(np.argmin(np.abs(hours - lead)))
-        if HAS_CARTOPY:
-            ax = fig.add_subplot(nrows, ncols, k + 1, projection=proj)
-            ax.set_global()
-            ax.coastlines(resolution="110m", linewidth=0.4, color="0.25")
-        else:
-            ax = fig.add_subplot(nrows, ncols, k + 1)
-            ax.set_aspect("equal")
-        pcolormesh(ax, lon, lat, data[idx], vmin, vmax, f.cmap, proj)
-        ax.set_title(lead_label(int(hours[idx])), fontsize=10)
-        ax.set_xticks([])
-        ax.set_yticks([])
-    fig.suptitle(f"2-m temperature [K]  —  init {init_label}", fontsize=13)
+    fig.suptitle(f"{name}  ({fmt_latlon(lat, lon)})   —   init {fmt_init(init)} UTC",
+                 fontsize=14, weight="bold")
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=100, facecolor="white")
+    fig.savefig(out_path, dpi=200, facecolor="white")
+    plt.close(fig)
+    print(f"  series: {out_path}", flush=True)
+
+
+# -----------------------------------------------------------------------------
+# 2. Overview — small multiples of all 40 lead times, one figure per field
+# -----------------------------------------------------------------------------
+def overview(ds: xr.Dataset, init, lead, field_name: str, out_path: Path):
+    f = BY_NAME[field_name]
+    lon = ds["lon"].values
+    lat = ds["lat"].values
+    data = load_field(ds, f)
+    data_c, lat_c, lon_c = coarsen(data, lat, lon, factor=2)
+    vmin, vmax = color_limits(f, data)
+
+    n = data_c.shape[0]
+    ncols = 8
+    nrows = int(np.ceil(n / ncols))
+    proj = ccrs.PlateCarree() if HAS_CARTOPY else None
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(ncols * 2.6, nrows * 1.4),
+        subplot_kw={"projection": proj} if HAS_CARTOPY else {},
+        squeeze=False,
+    )
+    for i, ax in enumerate(axes.flat):
+        if i < n:
+            mesh = pcolormesh(ax, lon_c, lat_c, data_c[i], vmin, vmax, f.cmap, proj)
+            ax.set_title(f"T+{lead[i]:03d}h", fontsize=10)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        if HAS_CARTOPY:
+            ax.set_global()
+            ax.coastlines(resolution="110m", linewidth=0.25, color="0.35")
+        else:
+            ax.set_aspect("equal")
+
+    # Tight, deterministic layout: title sits just above the grid, and the
+    # colorbar lives in its own reserved band below (no overlap, no shrinking).
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.92, bottom=0.10,
+                        wspace=0.04, hspace=0.20)
+    cbar_ax = fig.add_axes([0.30, 0.035, 0.40, 0.018])
+    cbar = fig.colorbar(mesh, cax=cbar_ax, orientation="horizontal")
+    cbar.ax.tick_params(labelsize=9)
+    fig.suptitle(f"{f.label} [{f.unit}]  —  init {fmt_init(init)} UTC  (40 steps)",
+                 fontsize=14, weight="bold", y=0.975)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200, facecolor="white")
     plt.close(fig)
     print(f"  overview: {out_path}", flush=True)
 
 
 # -----------------------------------------------------------------------------
-# 3. 1-D time series at a location
+# 3. Animated GIF — standard operational animation
 # -----------------------------------------------------------------------------
-def time_series(ds: xr.Dataset, out_path: Path, lat, lon, init_label: str):
-    # lon may be given as -180..180; the grid is 0..360.
-    if lon < 0:
-        lon += 360.0
-    p = ds.sel(lat=lat, lon=lon, method="nearest").isel(batch=0)
-    hours = lead_hours(ds)
-    t2m = p["2m_temperature"].values
-    mslp = p["mean_sea_level_pressure"].values
-    ws10 = np.sqrt(p["10m_u_component_of_wind"].values ** 2
-                   + p["10m_v_component_of_wind"].values ** 2)
-    prcp = p["total_precipitation_6hr"].values
-    loc = f"({float(p['lat'].values):.2f}°, {float(p['lon'].values) % 360:.2f}°)"
+def _fig_to_pil(fig) -> "Image.Image":
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=100, facecolor="white")
+    buf.seek(0)
+    return Image.open(buf).copy()
 
-    fig, axes = plt.subplots(3, 1, figsize=(9, 9), sharex=True)
-    axes[0].plot(hours, t2m, "o-", lw=1.8, color="#c0392b")
-    axes[0].set_ylabel("2-m temperature [K]")
-    axes[1].plot(hours, ws10, "o-", lw=1.8, color="#1f6fb2")
-    axes[1].set_ylabel("10-m wind speed [m/s]")
-    axes[2].plot(hours, mslp, "o-", lw=1.8, color="#2c3e50")
-    axes[2].set_ylabel("MSLP [hPa]")
-    axes[2].set_xlabel("Lead time [h]")
-    ax2 = axes[1].twinx()
-    ax2.bar(hours, prcp, width=5, color="#27ae60", alpha=0.45, label="6-h precip")
-    ax2.set_ylabel("6-h precip [mm]", color="#27ae60")
-    ax2.set_ylim(0, max(1.0, float(np.nanmax(prcp)) * 1.25))
-    for ax in axes:
-        ax.grid(True, alpha=0.3)
-    fig.suptitle(f"Weather at {loc}  —  init {init_label}", fontsize=13)
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=110, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-    print(f"  series: {out_path}", flush=True)
+
+def animate_field(ds: xr.Dataset, init, valid, field_name: str, out_gif: Path, fps: int):
+    f = BY_NAME[field_name]
+    lon = ds["lon"].values
+    lat = ds["lat"].values
+    data = load_field(ds, f)
+    vmin, vmax = color_limits(f, data)
+    frames = []
+    for i in range(data.shape[0]):
+        fig, ax, proj = new_global_ax()
+        pcolormesh(ax, lon, lat, data[i], vmin, vmax, f.cmap, proj)
+        ax.set_title(f"{f.label}  [{f.unit}]   Valid: {fmt_valid(valid[i])}",
+                     fontsize=12, pad=6)
+        ax.annotate(f"INIT {fmt_init(init)} UTC", xy=(0.005, 0.015),
+                    xycoords="axes fraction", fontsize=8, color="0.25")
+        cbar_ax = fig.add_axes([0.35, 0.03, 0.30, 0.025])
+        fig.colorbar(ax.collections[0], cax=cbar_ax, orientation="horizontal",
+                     label=f.unit)
+        frames.append(_fig_to_pil(fig))
+        plt.close(fig)
+    out_gif.parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(out_gif, save_all=True, append_images=frames[1:],
+                   duration=max(40, int(1000 / fps)), loop=0, optimize=False)
+    print(f"  gif: {out_gif}  ({len(frames)} frames, {fps} fps)", flush=True)
+
+
+def animate_mslp_wind(ds: xr.Dataset, init, valid, out_gif: Path, fps: int):
+    lon = ds["lon"].values
+    lat = ds["lat"].values
+    mslp = _drop_batch(ds["mean_sea_level_pressure"]).values.astype(np.float32) * 0.01
+    wspd = np.sqrt(_drop_batch(ds["10m_u_component_of_wind"]).values.astype(np.float32) ** 2
+                   + _drop_batch(ds["10m_v_component_of_wind"]).values.astype(np.float32) ** 2)
+    vmax = float(np.nanpercentile(wspd, 98))
+    frames = []
+    for i in range(mslp.shape[0]):
+        fig, ax, proj = new_global_ax()
+        pcolormesh(ax, lon, lat, wspd[i], 0.0, vmax, "viridis", proj)
+        levels = np.arange(950, 1051, 4.0)
+        kw = dict(levels=levels, colors="k", linewidths=0.55)
+        if HAS_CARTOPY:
+            cs = ax.contour(lon, lat, mslp[i], transform=proj, **kw)
+        else:
+            cs = ax.contour(lon, lat, mslp[i], **kw)
+        ax.clabel(cs, fmt="%d", fontsize=5, inline=True, inline_spacing=2)
+        ax.set_title(f"MSLP [hPa, contours] + 10-m wind   Valid: {fmt_valid(valid[i])}",
+                     fontsize=12, pad=6)
+        ax.annotate(f"INIT {fmt_init(init)} UTC", xy=(0.005, 0.015),
+                    xycoords="axes fraction", fontsize=8, color="0.25")
+        cbar_ax = fig.add_axes([0.35, 0.03, 0.30, 0.025])
+        fig.colorbar(ax.collections[0], cax=cbar_ax, orientation="horizontal",
+                     label="10-m wind speed [m/s]")
+        frames.append(_fig_to_pil(fig))
+        plt.close(fig)
+    out_gif.parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(out_gif, save_all=True, append_images=frames[1:],
+                   duration=max(40, int(1000 / fps)), loop=0, optimize=False)
+    print(f"  gif: {out_gif}  ({len(frames)} frames, {fps} fps)", flush=True)
 
 
 # -----------------------------------------------------------------------------
 # main
 # -----------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser(description="Visualize GraphCast predictions.")
-    ap.add_argument("--predictions", required=True, type=Path, help="path to predictions .nc")
-    ap.add_argument("--out-dir", type=Path, default=None,
-                    help="output root (default: <project>/visualizations/<stem>)")
-    ap.add_argument("--fields", nargs="*", default=None,
-                    help="subset of field names to render (default: all)")
-    ap.add_argument("--lead-hours", nargs="*", type=int, default=None,
-                    help="lead times for static maps (default: every 24h)")
-    ap.add_argument("--lat", type=float, default=31.23, help="time-series latitude")
-    ap.add_argument("--lon", type=float, default=121.47, help="time-series longitude")
+    ap = argparse.ArgumentParser(description="Publication-grade forecast visualizer.")
+    ap.add_argument("--predictions", required=True, type=Path)
+    ap.add_argument("--model", default="graphcast", help="model family (results subdir)")
+    ap.add_argument("--variant", default="operational", help="model variant")
+    ap.add_argument("--out-root", type=Path, default=None,
+                    help="results root (default: <repo>/results or $RESULTS_ROOT)")
     ap.add_argument("--fps", type=int, default=6, help="GIF frames per second")
     ap.add_argument("--no-gif", action="store_true")
-    ap.add_argument("--no-maps", action="store_true")
+    ap.add_argument("--no-overview", action="store_true")
     ap.add_argument("--no-series", action="store_true")
     args = ap.parse_args()
 
     if not args.predictions.exists():
         raise SystemExit(f"predictions file not found: {args.predictions}")
 
-    ds = xr.open_dataset(args.predictions, engine="netcdf4")
-    init = parse_init_time(args.predictions)
-    init_label = (
-        str(init).replace("T", " ").replace(":00", "Z", 1)
-        if str(init) != "NaT" else "?"
+    if Image is None:
+        print("Pillow not installed; GIFs disabled", flush=True)
+
+    import os
+    out_root = args.out_root or Path(
+        os.environ.get("RESULTS_ROOT", str(REPO_ROOT / "results"))
     )
 
-    out_root = args.out_dir or (PROJECT_ROOT / "visualizations" / args.predictions.stem)
-    out_root.mkdir(parents=True, exist_ok=True)
-    print(f"Output root: {out_root}", flush=True)
-
-    # Field selection.
-    by_name = {f.name: f for f in FIELDS}
-    if args.fields:
-        fields = [by_name[n] for n in args.fields]
+    ds = xr.open_dataset(args.predictions, engine="netcdf4")
+    # Prefer the self-describing init_time coord (unified schema); fall back to
+    # the init time encoded in the filename (legacy GraphCast schema).
+    if "init_time" in ds.coords:
+        init = np.datetime64(ds["init_time"].values.astype("datetime64[s]")[()])
     else:
-        fields = FIELDS
+        init = parse_init_time(args.predictions)
+    init_dir = np.datetime_as_string(init.astype("datetime64[s]"), unit="m")[:13] + "Z"
 
-    lead_list = args.lead_hours or DEFAULT_LEAD_HOURS
+    run_dir = out_root / args.model / args.variant / init_dir / "visualizations"
+    print(f"Output root: {run_dir}", flush=True)
 
-    # 1. GIFs
+    valid, lead = valid_times(ds, init)
+    print(f"init={fmt_init(init)}Z  steps={len(lead)}  horizon={lead[-1]}h", flush=True)
+
+    if not args.no_series:
+        for city in CITIES:
+            name, lat, lon, _, _ = city
+            fname = f"timeseries_{name}_{fmt_latlon_file(lat, lon)}.png"
+            time_series_city(ds, init, valid, city, run_dir / "series" / fname)
+
+    if not args.no_overview:
+        for name in OVERVIEW_FIELDS:
+            if not field_available(ds, BY_NAME[name]):
+                print(f"  overview: skip {name} (not in prediction)", flush=True)
+                continue
+            overview(ds, init, lead, name, run_dir / "overview" / f"{name}_40steps.png")
+
     if not args.no_gif and Image is not None:
         for name in GIF_FIELDS:
-            if name not in by_name or by_name[name] not in fields:
+            if not field_available(ds, BY_NAME[name]):
+                print(f"  gif: skip {name} (not in prediction)", flush=True)
                 continue
-            animate_pcolormesh(ds, by_name[name], out_root / "gif" / f"anim_{name}.gif",
-                               init_label, args.fps)
-        if "mean_sea_level_pressure" in [f.name for f in fields]:
-            animate_mslp_wind(ds, out_root / "gif" / "anim_mslp_10mwind.gif",
-                              init_label, args.fps)
-    elif not args.no_gif and Image is None:
-        print("Pillow not installed; skipping GIFs", flush=True)
+            animate_field(ds, init, valid, name, run_dir / "gif" / f"anim_{name}.gif", args.fps)
+        if all(n in ds for n in ("mean_sea_level_pressure", "10m_u_component_of_wind",
+                                 "10m_v_component_of_wind")):
+            animate_mslp_wind(ds, init, valid, run_dir / "gif" / "anim_mslp_wind10m.gif", args.fps)
+        else:
+            print("  gif: skip anim_mslp_wind10m (not in prediction)", flush=True)
 
-    # 2. Static maps + overview
-    if not args.no_maps:
-        for f in fields:
-            static_maps(ds, f, out_root / "maps", lead_list, init_label)
-        overview_grid(ds, out_root / "overview" / "overview_2m_temperature.png", init_label)
-
-    # 3. Time series
-    if not args.no_series:
-        time_series(ds, out_root / "series" / "timeseries.png", args.lat, args.lon, init_label)
-
+    ds.close()
     print("Done.", flush=True)
 
 
