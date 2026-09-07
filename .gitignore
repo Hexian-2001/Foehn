@@ -23,8 +23,14 @@ aurora_forecast/model_weights/
 # --- Raw + processed weather data — regenerable (stage 1/2 reproduce it).
 weathernext_forecast/data/
 weathernext_forecast/predictions/
+aurora_forecast/data/
 data/
 predictions/
+
+# --- Runtime outputs. Keep code and reproducible configuration in git; move
+# selected products to object/archive storage through the explicit sync tool.
+results/
+logs/
 
 # --- Debug / throwaway notebooks (heavy embedded image output).
 weathernext_forecast/src/weathernext_forecast/test.ipynb
@@ -33,6 +39,10 @@ weathernext_forecast/src/weathernext_forecast/test.ipynb
 __pycache__/
 *.pyc
 *.egg-info/
+.pytest_cache/
+.coverage
+.mypy_cache/
+.ruff_cache/
 .ipynb_checkpoints/
 .venv/
 venv/
@@ -45,6 +55,17 @@ venv/
 *.log
 *.tar
 *.b64
+*.bak
+*.tmp
+*.tmp.nc
 
 # --- Local sync scratch dir (rsync/scp pull staging).
 _syn_pred/
+
+# --- Secrets — never commit API keys / provider credentials.
+.env
+.env.*
+
+# --- Platform asset manifest snapshot (real turbine/site coordinates + internal
+# identifiers). Copied from the benchmark platform at deploy time, never from git.
+push_to_platform/asset_catalog.json
