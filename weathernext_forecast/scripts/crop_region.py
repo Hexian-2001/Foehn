@@ -2,7 +2,7 @@
 # =============================================================================
 # Prediction store CLI: unify + crop + relocate an already-saved model .nc.
 # =============================================================================
-# Thin wrapper over `weathernext_forecast.prediction_store`. It reads a raw
+# Thin wrapper over `foehn_core.prediction_store`. It reads a raw
 # model prediction (GraphCast/WeatherNext .nc), normalizes it into the
 # model-agnostic schema, crops it to a lat/lon box (default: China), and writes
 # it into the EXTERNAL, model-organized results tree:
@@ -26,18 +26,16 @@ import os
 import sys
 from pathlib import Path
 
-# Make the package importable: <repo>/weathernext_forecast/src.
-SRC_DIR = Path(__file__).resolve().parents[1] / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+# Make the shared runtime package importable from the monorepo checkout.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CORE_SRC = REPO_ROOT / "foehn_core" / "src"
+if str(CORE_SRC) not in sys.path:
+    sys.path.insert(0, str(CORE_SRC))
 
 import numpy as np
 import xarray as xr
 
-from weathernext_forecast import prediction_store as store
-
-# Script lives at <repo>/weathernext_forecast/scripts/crop_region.py -> shared repo root.
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from foehn_core import prediction_store as store
 
 
 def main() -> None:

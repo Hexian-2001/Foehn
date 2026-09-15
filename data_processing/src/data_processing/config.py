@@ -55,6 +55,19 @@ STATIC_MAP = {
     "lsm": "land_sea_mask",
 }
 
+# ERA5 static fields (geopotential_at_surface, land_sea_mask) at 0.25 deg.
+# GraphCast was trained and normalized on ERA5, so the static fields MUST come
+# from ERA5 (orography ~31 km, geopotential max ~55229 m2/s2) — NOT from the IFS
+# open-data static (orography ~9 km, max ~57458). This .nc is a fixed artifact
+# extracted once from the DeepMind demo data, stored alongside the normalization
+# stats. Overridable via $GC_STATIC_NC.
+STATIC_NC: Path = Path(
+    os.environ.get(
+        "GC_STATIC_NC",
+        PACKAGE_ROOT.parent / "weathernext_forecast" / "models" / "stats" / "static.nc",
+    )
+)
+
 # ---------------------------------------------------------------------------
 # Coordinate handling. cfgrib emits `latitude`/`longitude`/`isobaricInhPa` and a
 # few GRIB-only scalar coords we drop (they encode level-type metadata, not the

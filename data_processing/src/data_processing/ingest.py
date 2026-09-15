@@ -64,8 +64,26 @@ def read_cycle(date: dt.date, hour: int, raw_root: Path) -> xr.Dataset:
 
 
 def read_static(raw_root: Path) -> xr.Dataset:
-    """Time-invariant static fields (geopotential_at_surface, land_sea_mask)."""
-    return _normalize(_read_grib(raw_root / "static" / "static.grib2"), config.STATIC_MAP)
+    """Time-invariant ERA5 static fields (geopotential_at_surface, land_sea_mask).
+
+    GraphCast was trained/normalized on ERA5, so the static fields must come from
+    ERA5 (orography ~31 km), not the IFS open-data static (orography ~9 km) that
+    this pipeline used to read from ``static/static.grib2``. ``config.STATIC_NC``
+    is a fixed ERA5 static .nc extracted once from the DeepMind demo data; it is
+    already on the standard GraphCast grid (lat -90..90, lon 0..360), so no GRIB
+    normalization is needed — just strip any batch/time dims and order to
+    (lat, lon).
+    """
+    ds = xr.load_dataset(config.STATIC_NC).squeeze(drop=True)
+    static = {}
+    for var in ("geopotential_at_surface", "land_sea_mask"):
+        if var not in ds:
+            continue
+        da = ds[var]
+        if da.dims != ("lat", "lon"):
+            da = da.transpose("lat", "lon")
+        static[var] = da
+    return xr.Dataset(static)
 
 
 def _filename(date: dt.date) -> str:

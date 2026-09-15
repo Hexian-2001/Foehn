@@ -32,8 +32,6 @@ UPSTREAM_DIR = PROJECT_ROOT / "upstream" / "weathernext"
 WEIGHTS_DIR = PROJECT_ROOT / "models" / "weights"     # model checkpoints (.npz)
 STATS_DIR = PROJECT_ROOT / "models" / "stats"         # normalization stats (.nc)
 DATA_DIR = PROJECT_ROOT / "data" / "processed"        # standard-format .nc inputs
-RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"          # files exactly as downloaded
-PREDICTIONS_DIR = PROJECT_ROOT / "predictions"        # model output (.nc)
 
 # External results tree — DECOUPLED from the package, one level above the project.
 # Predictions + visualizations for every model land here, organized by model:
@@ -53,7 +51,7 @@ RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", str(PROJECT_ROOT.parent / "re
 #   GraphCast_operational.npz  -> 0.25 deg, 13 levels, HRES-fc0 (no precip input)
 MODEL_FILENAME = "GraphCast_operational.npz"
 
-# Results-tree identity for the saved predictions (see prediction_store).
+# Results-tree identity for the saved predictions (see foehn_core.prediction_store).
 # Kept explicit rather than parsed from MODEL_FILENAME so the tree stays stable
 # as checkpoints change.
 MODEL_FAMILY = "graphcast"

@@ -15,6 +15,7 @@ ECMWF 开放数据 (IFS 0.25°)  →  下载 fc0 分析场  →  处理成标准
 - 三阶段严格解耦：每阶段只**读文件 / 写文件**，无共享内存状态，可独立重跑。
 - 下载、处理、画图都在登录节点跑（纯 CPU）；**推理是唯一 GPU 步骤**，经 Slurm 提交到 `gpu` 分区。
 - 预测结果统一为**通用格式**，写入**外部** `results/` 目录树，按模型组织；默认只保存**中国区**（约 0.4 GB），不再落 13 GB 的全球文件。
+- 通用 NetCDF 契约与原子写入由顶层 `foehn_core` 维护，本包只包含 GraphCast 专属逻辑。
 
 ---
 
@@ -175,6 +176,10 @@ python weathernext_forecast/scripts/crop_region.py \
 | `series/` | `timeseries_Beijing_39.90N_116.40E.png`<br>`timeseries_Shanghai_31.23N_121.47E.png`<br>`timeseries_Guangzhou_23.13N_113.26E.png` | 3 城时序曲线（2×2 面板：2 米气温 / 10 米风速 / 海平面气压 / 6h 降水），横轴为**实际时间戳**（UTC） |
 | `overview/` | `2m_temperature_40steps.png`<br>`wind_10m_40steps.png`<br>`wind_100m_40steps.png` | 3 个变量各自 40 步的小多图总览 |
 | `gif/` | `anim_2m_temperature.gif`<br>`anim_wind_10m.gif`<br>`anim_wind_100m.gif`<br>`anim_mslp_wind10m.gif` | 4 个动图（40 帧）：2 米气温、10 米风速、100 米风速、海平面气压+10 米风 |
+
+> Aurora `0.25-finetuned` 检查点只输出温度、风、气压和高空变量，**不输出降水量**。因此 Aurora 的时序图会保留第 4 个面板并明确标注“该模型未预测降水”，不会伪造或从其他变量推算降水。若业务必须使用 Aurora 降水，需要另行部署支持 `total precipitation` 输出的 Aurora 1.5 系列模型，并重新验证输入、检查点和推理资源。
+
+地图会根据预测文件中的经纬度自动选择范围：中国区结果显示 70–140°E、15–55°N；只有全球预测才使用全球底图。
 
 ---
 

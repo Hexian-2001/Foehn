@@ -6,10 +6,8 @@
 # variable names, and hands the result to the model-agnostic prediction store so
 # it lands in the same results tree / schema as GraphCast.
 #
-# Decoupling note: this module owns ONLY Aurora specifics (its variable names,
-# grid, checkpoint). The unified storage contract is imported from the shared
-# `prediction_store` — which is model-agnostic by design and knows nothing about
-# either model's internals.
+# This module owns only Aurora specifics (variable names, grid and checkpoint).
+# The unified storage contract comes from the model-independent `foehn_core`.
 # =============================================================================
 
 from __future__ import annotations
@@ -33,13 +31,12 @@ if str(config.UPSTREAM_DIR) not in sys.path:
     sys.path.insert(0, str(config.UPSTREAM_DIR))
 from aurora import Aurora, Batch, rollout  # noqa: E402
 
-# Shared model-agnostic prediction store (single source of truth for the unified
-# results-tree schema). Lives in the weathernext package by historical accident;
-# it has no dependency on that package's internals (only numpy/xarray).
-_WEATHERNEXT_SRC = config.PROJECT_ROOT.parent / "weathernext_forecast" / "src"
-if str(_WEATHERNEXT_SRC) not in sys.path:
-    sys.path.insert(0, str(_WEATHERNEXT_SRC))
-from weathernext_forecast import prediction_store  # noqa: E402
+# Shared model-agnostic prediction store: single source of truth for the output
+# schema and atomic persistence policy.
+_FOEHN_CORE_SRC = config.PROJECT_ROOT.parent / "foehn_core" / "src"
+if str(_FOEHN_CORE_SRC) not in sys.path:
+    sys.path.insert(0, str(_FOEHN_CORE_SRC))
+from foehn_core import prediction_store  # noqa: E402
 
 
 def load_model(ckpt_path: Path, device: str) -> Aurora:

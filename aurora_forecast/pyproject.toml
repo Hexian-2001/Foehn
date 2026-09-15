@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aurora-forecast"
+version = "0.1.0"
+description = "Operational Microsoft Aurora inference adapter for Foehn"
+requires-python = ">=3.10"
+dependencies = ["numpy", "torch", "xarray"]
+
+[project.scripts]
+run-aurora-inference = "aurora_forecast.inference:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

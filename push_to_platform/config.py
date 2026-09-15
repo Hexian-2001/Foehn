@@ -7,6 +7,7 @@ same code runs locally (dry-run) and on Pawsey without edits.
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 from pathlib import Path
 
@@ -38,6 +39,29 @@ CATALOG_VERSION = "1.0.0"
 LEAD_TIME_COUNT = 72
 HORIZON_HOURS = 72
 INTERVAL_MINUTES = 60
+
+# Fixed forecast issuance instant: 16:00 UTC (= next-day Beijing 00:00 = the
+# platform's "London 16:00"). Every realtime submission has ``start_date`` set to
+# this time; the push deadline is 16 h earlier (00:00 UTC, = Beijing 08:00).
+FORECAST_ISSUANCE_UTC = 16
+
+
+def default_start_datetime(now_utc: dt.datetime | None = None) -> str:
+    """Return the start_date for a submission made *now*.
+
+    The forecast is issued at ``FORECAST_ISSUANCE_UTC`` (16:00 UTC = the next
+    Beijing midnight). The correct target is the *next* such instant strictly
+    after ``now``. ``now + 1 day`` was only right when ``now`` fell in the
+    16:00–24:00 UTC window (the scheduled pre-deadline push); any run earlier in
+    the day (e.g. a same-day backfill/replay after 00:00 UTC) was off by one day.
+    """
+    now = now_utc or dt.datetime.now(dt.timezone.utc)
+    start = now.replace(
+        hour=FORECAST_ISSUANCE_UTC, minute=0, second=0, microsecond=0
+    )
+    if start <= now:
+        start += dt.timedelta(days=1)
+    return start.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ── Model registry ──
 # key  -> dict(provider, variant, model_version). `provider` must equal the

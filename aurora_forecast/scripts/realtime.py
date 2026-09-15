@@ -109,15 +109,19 @@ def stage_submit(input_name: str, date, hour, args) -> None:
     subprocess.run(cmd, check=True)
 
 
-def stage_visualize(args) -> None:
+def stage_visualize(date, hour) -> None:
     print("[4/4] rendering visualizations", flush=True)
-    # Predictions land in the EXTERNAL results tree under the aurora identity.
+    # Select this exact cycle, rather than the newest file from a previous run.
+    prediction_dir = (
+        REPO_ROOT / "results" / "aurora" / "0.25-finetuned"
+        / f"{date}T{hour:02d}Z" / "predictions"
+    )
     preds = sorted(
-        (REPO_ROOT / "results" / "aurora").glob("**/predictions/*.nc"),
+        prediction_dir.glob("*.nc"),
         key=lambda p: p.stat().st_mtime,
     )
     if not preds:
-        raise SystemExit("no results/aurora/**/predictions/*.nc found to visualize")
+        raise SystemExit(f"no Aurora prediction found for this cycle in {prediction_dir}")
     pred = preds[-1]
     cmd = [
         sys.executable, str(VIZ_SCRIPT),
@@ -163,10 +167,14 @@ def main() -> None:
 
     client = OpenDataClient(source=args.source)
 
-    # Resolve the cycle.
+    # Resolve and validate the cycle before creating/downloading anything.
+    if args.latest and (args.date or args.time):
+        ap.error("--latest cannot be combined with --date/--time")
     if args.date and args.time:
         date = dt.datetime.strptime(args.date, "%Y-%m-%d").date()
         hour = int(args.time)
+        if hour not in dl_config.CYCLE_HOURS:
+            ap.error(f"--time must be one of {dl_config.CYCLE_HOURS}, got {hour}")
     elif args.latest or (not args.date and not args.time):
         date, hour = resolve_latest(client)
         print(f"latest available cycle: {date} {hour:02d}Z", flush=True)
@@ -187,8 +195,14 @@ def main() -> None:
 
     stage_submit(input_name, date, hour, args)
 
+    if args.no_wait:
+        if not args.no_visualize:
+            print("visualization skipped: the Slurm job is still running (--no-wait).", flush=True)
+        print("realtime pipeline submitted.", flush=True)
+        return
+
     if not args.no_visualize:
-        stage_visualize(args)
+        stage_visualize(date, hour)
 
     print("realtime pipeline complete.", flush=True)
 

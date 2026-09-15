@@ -24,7 +24,10 @@ opendata_download          (共享，模型无关)  下载 ECMWF open-data GRIB
 - **输入 .nc** 采用 Aurora 自己的 `Batch.to_netcdf` 布局，GPU 端用
   `Batch.from_netcdf` 原样读回。
 - **输出**统一名（`2m_temperature`/`10m_u_component_of_wind`/...），落
-  `results/aurora/0.25-finetuned/<init>Z/predictions/*.nc`。
+  `results/aurora/0.25-finetuned/<init>Z/predictions/*.nc`。通用 NetCDF 契约与原子写入由顶层 `foehn_core` 维护，Aurora 不依赖 GraphCast 包。
+- Aurora `0.25-finetuned` 的模型输出中没有降水变量；时序图第 4 个面板会明确
+  标注“该模型未预测降水”。这不是可视化漏读，也不应从其他变量伪造降水。
+  需要 Aurora 降水产品时，应单独部署并验证支持降水输出的 Aurora 1.5 系列。
 
 ## 一次性部署（Setonix）
 
@@ -50,6 +53,9 @@ bash aurora_forecast/scripts/download_weights.sh
 ./realtime_all.sh                                        # 最新 cycle
 ./realtime_all.sh --date 2026-08-31 --time 00
 ```
+
+使用 `--no-wait` 时，命令只提交 Slurm 作业并返回，不会立刻可视化尚未完成的
+结果；作业结束后可单独运行共享 `visualize.py`，或使用默认等待模式。
 
 资源：Aurora 只需 **1 GPU**（MI250X 双 GCD，gfx90a 原生支持，无 HSA override）。
 GraphCast 需 3 GPU。两者用不同 conda 环境（infer-gpu / aurora-gpu），sbatch 自动切换。

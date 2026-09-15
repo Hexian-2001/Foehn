@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "foehn-core"
+version = "0.1.0"
+description = "Shared runtime contracts for the Foehn forecast platform"
+requires-python = ">=3.10"
+dependencies = ["numpy", "xarray"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

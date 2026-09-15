@@ -44,7 +44,13 @@ except ImportError:  # pragma: no cover - depends on the env, not the code
     tqdm = None
 
 from weathernext_forecast import config
-from weathernext_forecast import prediction_store
+
+# The unified output contract is shared by every model and therefore lives in
+# its own package instead of making Aurora depend on the GraphCast package.
+_FOEHN_CORE_SRC = config.PROJECT_ROOT.parent / "foehn_core" / "src"
+if str(_FOEHN_CORE_SRC) not in sys.path:
+    sys.path.insert(0, str(_FOEHN_CORE_SRC))
+from foehn_core import prediction_store  # noqa: E402
 
 # Make the upstream `weathernext` package importable. The fork lives outside the
 # installed packages at config.UPSTREAM_DIR; adding it to sys.path lets us

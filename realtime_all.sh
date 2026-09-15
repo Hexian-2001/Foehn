@@ -24,10 +24,62 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONTROL_ENV="${FOEHN_CONTROL_ENV:-/scratch/pawsey0115/hwang4/miniconda3/envs/infer-gpu}"
+CONTROL_PYTHON="${FOEHN_CONTROL_PYTHON:-$CONTROL_ENV/bin/python}"
+LOG_DIR="${FOEHN_LOG_DIR:-$HERE/logs}"
+mkdir -p "$LOG_DIR"
+RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_LOG="$LOG_DIR/realtime_all_${RUN_STAMP}.log"
+exec > >(tee -a "$RUN_LOG") 2>&1
+trap 'rc=$?; echo "[$(date -u +%FT%TZ)] FAILED line=$LINENO exit=$rc"; exit "$rc"' ERR
+
+echo "[$(date -u +%FT%TZ)] Foehn dual-model run started"
+echo "log: $RUN_LOG"
 
 # Default to the newest available cycle when no cycle args are given.
 if [ "$#" -eq 0 ]; then
     set -- --latest
+fi
+
+# Resolve --latest exactly once. Without this normalization, GraphCast and
+# Aurora query the catalogue independently and can select different cycles if a
+# new analysis appears between their sequential runs.
+ARGS=("$@")
+SOURCE="google"
+HAS_LATEST=0
+HAS_DATE=0
+HAS_TIME=0
+for ((i = 0; i < ${#ARGS[@]}; i++)); do
+    case "${ARGS[$i]}" in
+        --latest) HAS_LATEST=1 ;;
+        --date) HAS_DATE=1; ((i += 1)) ;;
+        --date=*) HAS_DATE=1 ;;
+        --time) HAS_TIME=1; ((i += 1)) ;;
+        --time=*) HAS_TIME=1 ;;
+        --source)
+            ((i += 1))
+            SOURCE="${ARGS[$i]}"
+            ;;
+        --source=*) SOURCE="${ARGS[$i]#*=}" ;;
+    esac
+done
+
+if [ "$HAS_LATEST" -eq 1 ] || { [ "$HAS_DATE" -eq 0 ] && [ "$HAS_TIME" -eq 0 ]; }; then
+    if [ "$HAS_DATE" -eq 1 ] || [ "$HAS_TIME" -eq 1 ]; then
+        echo "error: --latest cannot be combined with --date/--time" >&2
+        exit 2
+    fi
+    read -r CYCLE_DATE CYCLE_HOUR < <("$CONTROL_PYTHON" "$HERE/scripts/resolve_latest.py" --source "$SOURCE")
+    NORMALIZED=()
+    for arg in "${ARGS[@]}"; do
+        [ "$arg" = "--latest" ] || NORMALIZED+=("$arg")
+    done
+    NORMALIZED+=(--date "$CYCLE_DATE" --time "$CYCLE_HOUR")
+    set -- "${NORMALIZED[@]}"
+    echo "resolved shared cycle: ${CYCLE_DATE}T${CYCLE_HOUR}Z (source=$SOURCE)"
+elif [ "$HAS_DATE" -ne 1 ] || [ "$HAS_TIME" -ne 1 ]; then
+    echo "error: provide both --date and --time, or --latest" >&2
+    exit 2
 fi
 
 echo "########################################################################"
@@ -43,3 +95,4 @@ bash "$HERE/aurora_forecast/scripts/realtime.sh" "$@"
 
 echo
 echo "=== realtime_all complete: GraphCast + Aurora predictions saved & visualized ==="
+echo "[$(date -u +%FT%TZ)] SUCCESS"
